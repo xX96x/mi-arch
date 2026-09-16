@@ -8,10 +8,33 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "=========================================================="
-echo "=== 1. USUARIO FABIARCH Y PERMISOS ==="
+echo "=== 0. SINCRONIZANDO RELOJ Y PREPARANDO LLAVES GPG ==="
 echo "=========================================================="
+# Sincronizar reloj para evitar firmas PGP marcadas como inválidas/expiradas
+timedatectl set-ntp true 2>/dev/null || true
+
+# Inyectar preventivamente la llave de CachyOS antes de cualquier sync
+echo "[+] Importando llave pública de CachyOS en pacman-key..."
+curl -sL https://raw.githubusercontent.com/cachyos-keyring/master/cachyos-keyring.gpg -o /tmp/cachyos-keyring.gpg
+pacman-key --add /tmp/cachyos-keyring.gpg
+pacman-key --lsign-key F3B607488BE3543F 2>/dev/null || true
+rm -f /tmp/cachyos-keyring.gpg
+
+# Si CachyOS ya estaba en pacman.conf o faltan mirrorlists, reinstalamos su repo limpiamente
+if ! grep -q "cachyos" /etc/pacman.conf || [ ! -f /etc/pacman.d/cachyos-mirrorlist ]; then
+    echo "[+] Configurando/Reparando repositorio oficial de CachyOS..."
+    curl -s https://mirror.cachyos.org/cachyos-repo.tar.xz -o /tmp/cachyos-repo.tar.xz
+    tar -xf /tmp/cachyos-repo.tar.xz -C /tmp/
+    (cd /tmp/cachyos-repo && ./cachyos-repo.sh)
+    rm -rf /tmp/cachyos-repo*
+fi
+
+echo "=========================================================="
+echo "=== 1. PREPARATIVOS BÁSICOS Y USUARIO FABIARCH ==="
+echo "=========================================================="
+# Ahora pacman -Sy NUNCA fallará por firmas de CachyOS
 pacman -Sy --noconfirm
-pacman -S --needed --noconfirm curl tar sudo git
+pacman -S --needed --noconfirm git base-devel sudo paru octopi
 
 if ! id "fabiarch" &>/dev/null; then
     useradd -m -G wheel -s /bin/bash fabiarch
@@ -25,24 +48,7 @@ fi
 echo "%wheel ALL=(ALL:ALL) NOPASSWD: ALL" > /etc/sudoers.d/10-wheel
 
 echo "=========================================================="
-echo "=== 2. AÑADIENDO REPO CACHYOS E INSTALANDO PARU ==="
-echo "=========================================================="
-# Instalar repo de CachyOS si no está agregado
-if ! grep -q "cachyos" /etc/pacman.conf; then
-    echo "[+] Añadiendo repositorio oficial de CachyOS..."
-    curl -s https://mirror.cachyos.org/cachyos-repo.tar.xz -o /tmp/cachyos-repo.tar.xz
-    tar -xf /tmp/cachyos-repo.tar.xz -C /tmp/
-    (cd /tmp/cachyos-repo && ./cachyos-repo.sh)
-    rm -rf /tmp/cachyos-repo*
-else
-    echo "[+] Repositorio CachyOS ya configurado."
-fi
-
-# Instalar paru y octopi DIRECTOS desde el repositorio binario (¡en segundos!)
-pacman -Sy --needed --noconfirm paru octopi
-
-echo "=========================================================="
-echo "=== 3. INSTALANDO Y CONECTANDO CLOUDFLARE WARP ==="
+echo "=== 2. INSTALANDO Y CONECTANDO CLOUDFLARE WARP ==="
 echo "=========================================================="
 if ! command -v warp-cli &> /dev/null; then
     echo "[+] Instalando cloudflare-warp-bin con paru..."
@@ -62,7 +68,7 @@ sleep 3
 warp-cli --accept-tos status || true
 
 echo "=========================================================="
-echo "=== 4. INSTALANDO PLASMA Y RESTO DEL SISTEMA (VÍA WARP) ==="
+echo "=== 3. INSTALANDO PLASMA Y RESTO DEL SISTEMA (VÍA WARP) ==="
 echo "=========================================================="
 pacman -Syu --needed --noconfirm \
     plasma sddm networkmanager \
@@ -70,17 +76,15 @@ pacman -Syu --needed --noconfirm \
     htop fastfetch btop
 
 echo "=========================================================="
-echo "=== 5. SERVICIOS Y SEGURIDAD ==="
+echo "=== 4. SERVICIOS Y PERMISOS FINALES ==="
 echo "=========================================================="
 systemctl enable NetworkManager || true
 systemctl enable sddm || true
 
-# Restaurar permisos normales de sudo (con contraseña)
+# Restaurar seguridad en sudoers (pedir contraseña)
 echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/10-wheel
-
-# Permisos del directorio personal
 chown -R fabiarch:fabiarch /home/fabiarch
 
 echo "=========================================================="
-echo "¡LISTO! Sistema replicado a velocidad CachyOS y protegido por Warp."
+echo "¡LISTO! Sistema desplegado sin errores de firmas y con Warp."
 echo "=========================================================="
